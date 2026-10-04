@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>猫咪推物 - Step 1 基础搭建</title>
+    <style>
+        /* ===== 全局重置 ===== */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #D5CFC6; /* 莫兰迪暖灰背景 */
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            /* 禁止触摸缩放/滚动，游戏自己处理手势 */
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* ===== 游戏容器 ===== */
+        #gameContainer {
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.12);
+            cursor: pointer;
+        }
+
+        /* ===== 调试信息（后续步骤会替换为正式 UI） ===== */
+        #debug {
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            font-size: 12px;
+            color: #8B8276;
+            pointer-events: none;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas"></canvas>
+    <div id="debug"></div>
+</div>
+
+<script>
+"use strict";
+
+// ============================================================
+//  猫咪推物 — Step 1：基础搭建
+//  本步骤目标：
+//    1. Canvas 初始化 + 响应式缩放
+//    2. 游戏主循环
+//    3. 桌面场景绘制（桌面 + 边缘 + 地板）
+//    4. 极简风猫咪绘制
+//    5. 猫的移动控制（鼠标/触摸拖拽 + 速度记录）
+// ============================================================
+
+// ---------- 全局配置 ----------
+const CONFIG = {
+    // 虚拟逻辑分辨率（游戏内部坐标都基于此）
+    VIRTUAL_W: 800,
+    VIRTUAL_H: 600,
+
+    // 莫兰迪配色
+    COLORS: {
+        bg:        '#D5CFC6',  // 页面背景
+        floor:     '#C9C0B5',  // 地板
+        deskTop:   '#E8E0D5',  // 桌面
+        deskEdge:  '#B8AE9E',  // 桌沿
+        deskSide:  '#A89E8E',  // 桌侧
+        cat:       '#2C2C2C',  // 猫剪影（深色）
+        catEye:    '#F5F0E8',  // 猫眼/高光
+        accent:    '#A8907E',  // 强调色
+    },
+
+    // 桌面区域（虚拟坐标）
+    DESK: {
+        x: 60,
+        y: 80,
+        w: 680,
+        h: 340,
+        edgeY: 420,    // 桌沿 Y 坐标（物品掉落线）
+    },
+
+    // 猫的参数
+    CAT: {
+        x: 400,         // 初始中心 X
+        y: 360,         // 初始中心 Y（桌面中下部）
+        radius: 36,     // 猫身半径
+        speed: 6,       // 每帧最大移动速度
+        friction: 0.85, // 惯性衰减
+    },
+};
+
+// ---------- Canvas 初始化 ----------
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const debugEl = document.getElementById('debug');
+
+let scale = 1;        // 虚拟坐标 → 屏幕坐标的缩放比
+let offsetX = 0;     // 居中偏移
+let offsetY = 0;
+
+function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const vw = CONFIG.VIRTUAL_W;
+    const vh = CONFIG.VIRTUAL_H;
+
+    // 计算缩放：让虚拟分辨率适配窗口
+    const sx = window.innerWidth  / vw;
+    const sy = window.innerHeight / vh;
+    scale = Math.min(sx, sy);
+
+    const cw = vw * scale;
+    const ch = vh * scale;
+
+    canvas.style.width  = cw + 'px';
+    canvas.style.height = ch + 'px';
+    canvas.width  = cw * dpr;
+    canvas.height = ch * dpr;
+
+    // 让 ctx 绘制时用虚拟坐标
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ---------- 输入系统 ----------
+// 记录鼠标/触摸位置和速度
+const input = {
+    isDown: false,
+    x: 0,
+    y: 0,
+    prevX: 0,
+    prevY: 0,
+    // 划动速度（px/帧），后续物理系统要用
+    vx: 0,
+    vy: 0,
+    swipeSpeed: 0, // 标量速度
+};
+
+// 把屏幕坐标转换成虚拟坐标
+function screenToVirtual(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) / scale;
+    const y = (clientY - rect.top)  / scale;
+    return { x, y };
+}
+
+function onPointerDown(e) {
+    e.preventDefault();
+    const { x, y } = screenToVirtual(
+        e.touches ? e.touches[0].clientX : e.clientX,
+        e.touches ? e.touches[0].clientY : e.clientY
+    );
+    input.isDown = true;
+    input.x = input.prevX = x;
+    input.y = input.prevY = y;
+    input.vx = input.vy = 0;
+    input.swipeSpeed = 0;
+}
+
+function onPointerMove(e) {
+    if (!input.isDown) return;
+    e.preventDefault();
+    const { x, y } = screenToVirtual(
+        e.touches ? e.touches[0].clientX : e.clientX,
+        e.touches ? e.touches[0].clientY : e.clientY
+    );
+    input.x = x;
+    input.y = y;
+}
+
+function onPointerUp(e) {
+    e.preventDefault();
+    input.isDown = false;
+}
+
+canvas.addEventListener('mousedown', onPointerDown);
+canvas.addEventListener('mousemove', onPointerMove);
+canvas.addEventListener('mouseup',   onPointerUp);
+canvas.addEventListener('mouseleave', onPointerUp);
+canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+canvas.addEventListener('touchmove',  onPointerMove, { passive: false });
+canvas.addEventListener('touchend',   onPointerUp,   { passive: false });
+
+// ---------- 猫咪状态 ----------
+const cat = {
+    x: CONFIG.CAT.x,
+    y: CONFIG.CAT.y,
+    radius: CONFIG.CAT.radius,
+    vx: 0,  // 当前速度
+    vy: 0,
+    // 方向（用于绘制朝向）
+    facing: 0, // 弧度，0=朝右
+    // 眨眼
+    blinkTimer: 0,
+    isBlinking: false,
+    // 拍击动画（爪子伸出）
+    pawExtend: 0, // 0~1
+    pawTimer: 0,
+};
+
+// ---------- 游戏主循环 ----------
+let lastTime = 0;
+let fps = 0;
+
+function gameLoop(timestamp) {
+    // 计算 deltaTime（毫秒）
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+
+    // 简易 FPS 显示
+    if (dt > 0) fps = Math.round(1000 / dt);
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// ---------- 更新逻辑 ----------
+function update(dt) {
+    // --- 1. 计算输入速度 ---
+    // 用当前帧位移估算划动速度
+    input.vx = input.x - input.prevX;
+    input.vy = input.y - input.prevY;
+    input.swipeSpeed = Math.sqrt(input.vx * input.vx + input.vy * input.vy);
+    input.prevX = input.x;
+    input.prevY = input.y;
+
+    // --- 2. 猫移动 ---
+    if (input.isDown) {
+        // 按住时：猫朝手指方向移动（牵引感）
+        const dx = input.x - cat.x;
+        const dy = input.y - cat.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > 2) {
+            // 限制最大速度
+            const moveSpeed = Math.min(dist * 0.3, CONFIG.CAT.speed);
+            cat.vx = (dx / dist) * moveSpeed;
+            cat.vy = (dy / dist) * moveSpeed;
+            cat.facing = Math.atan2(dy, dx);
+        } else {
+            cat.vx *= CONFIG.CAT.friction;
+            cat.vy *= CONFIG.CAT.friction;
+        }
+
+        // 如果划动速度快 → 触发拍击动画
+        if (input.swipeSpeed > 8) {
+            cat.pawTimer = 200; // 持续 200ms
+        }
+    } else {
+        // 松手后惯性减速
+        cat.vx *= CONFIG.CAT.friction;
+        cat.vy *= CONFIG.CAT.friction;
+        if (Math.abs(cat.vx) < 0.1) cat.vx = 0;
+        if (Math.abs(cat.vy) < 0.1) cat.vy = 0;
+    }
+
+    // 应用速度
+    cat.x += cat.vx;
+    cat.y += cat.vy;
+
+    // 猫限制在桌面内
+    const D = CONFIG.DESK;
+    cat.x = Math.max(D.x + cat.radius, Math.min(D.x + D.w - cat.radius, cat.x));
+    cat.y = Math.max(D.y + cat.radius, Math.min(D.y + D.h - cat.radius, cat.y));
+
+    // --- 3. 眨眼计时 ---
+    cat.blinkTimer -= dt;
+    if (cat.blinkTimer <= 0) {
+        if (cat.isBlinking) {
+            cat.isBlinking = false;
+            cat.blinkTimer = 2000 + Math.random() * 3000; // 2-5 秒后下次眨眼
+        } else {
+            cat.isBlinking = true;
+            cat.blinkTimer = 120; // 眨眼持续 120ms
+        }
+    }
+
+    // --- 4. 拍击动画衰减 ---
+    if (cat.pawTimer > 0) {
+        cat.pawTimer -= dt;
+        cat.pawExtend = Math.min(1, cat.pawExtend + 0.15);
+    } else {
+        cat.pawExtend *= 0.8; // 收回
+        if (cat.pawExtend < 0.01) cat.pawExtend = 0;
+    }
+}
+
+// ---------- 渲染逻辑 ----------
+function render() {
+    // 清屏
+    ctx.fillStyle = CONFIG.COLORS.bg;
+    ctx.fillRect(0, 0, CONFIG.VIRTUAL_W, CONFIG.VIRTUAL_H);
+
+    drawScene();
+    drawCat();
+    drawDebug();
+}
+
+// 绘制场景（桌面 + 地板 + 边缘）
+function drawScene() {
+    const D = CONFIG.DESK;
+    const C = CONFIG.COLORS;
+
+    // 地板
+    ctx.fillStyle = C.floor;
+    ctx.fillRect(0, D.edgeY, CONFIG.VIRTUAL_W, CONFIG.VIRTUAL_H - D.edgeY);
+
+    // 桌侧（薄边）
+    ctx.fillStyle = C.deskSide;
+    ctx.fillRect(D.x, D.edgeY, D.w, 24);
+
+    // 桌沿线（高亮）
+    ctx.strokeStyle = C.deskEdge;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(D.x, D.edgeY);
+    ctx.lineTo(D.x + D.w, D.edgeY);
+    ctx.stroke();
+
+    // 桌面
+    ctx.fillStyle = C.deskTop;
+    ctx.fillRect(D.x, D.y, D.w, D.edgeY - D.y);
+
+    // 桌面边框（轻微）
+    ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(D.x + 0.5, D.y + 0.5, D.w - 1, D.edgeY - D.y - 1);
+
+    // 桌沿下方渐变阴影（物品掉落区域提示）
+    const grad = ctx.createLinearGradient(0, D.edgeY, 0, D.edgeY + 30);
+    grad.addColorStop(0, 'rgba(0,0,0,0.15)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(D.x, D.edgeY, D.w, 30);
+
+    // 桌面底部文字标注
+    ctx.fillStyle = 'rgba(139,130,118,0.35)';
+    ctx.font = '11px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('— 桌沿（物品掉落线）—', CONFIG.VIRTUAL_W / 2, D.edgeY + 16);
+}
+
+// 绘制极简风猫咪
+function drawCat() {
+    const C = CONFIG.COLORS;
+    const r = cat.radius;
+
+    ctx.save();
+    ctx.translate(cat.x, cat.y);
+
+    // --- 猫身（椭圆剪影）---
+    ctx.fillStyle = C.cat;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, r * 0.85, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // --- 猫耳朵（两个三角形）---
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.55, -r * 0.5);
+    ctx.lineTo(-r * 0.35, -r * 0.95);
+    ctx.lineTo(-r * 0.15, -r * 0.55);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(r * 0.55, -r * 0.5);
+    ctx.lineTo(r * 0.35, -r * 0.95);
+    ctx.lineTo(r * 0.15, -r * 0.55);
+    ctx.closePath();
+    ctx.fill();
+
+    // --- 猫眼（像素点风格）---
+    if (cat.isBlinking) {
+        // 眨眼：画一条短线
+        ctx.strokeStyle = C.catEye;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.3, -r * 0.1);
+        ctx.lineTo(-r * 0.12, -r * 0.1);
+        ctx.moveTo(r * 0.12, -r * 0.1);
+        ctx.lineTo(r * 0.3, -r * 0.1);
+        ctx.stroke();
+    } else {
+        // 正常眼：两个小方块（像素风）
+        ctx.fillStyle = C.catEye;
+        ctx.fillRect(-r * 0.3, -r * 0.15, 5, 5);
+        ctx.fillRect(r * 0.25, -r * 0.15, 5, 5);
+    }
+
+    // --- 猫鼻（小三角）---
+    ctx.fillStyle = C.catEye;
+    ctx.beginPath();
+    ctx.moveTo(-3, r * 0.05);
+    ctx.lineTo(3, r * 0.05);
+    ctx.lineTo(0, r * 0.15);
+    ctx.closePath();
+    ctx.fill();
+
+    // --- 嘴（两条弧线 = ω 形）---
+    ctx.strokeStyle = C.catEye;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(-3, r * 0.2, 4, 0, Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(3, r * 0.2, 4, 0, Math.PI);
+    ctx.stroke();
+
+    // --- 猫爪（拍击时伸出）---
+    if (cat.pawExtend > 0.01) {
+        const pawR = r * 0.4 * cat.pawExtend;
+        const pawDist = r + pawR * 0.5;
+        const px = Math.cos(cat.facing) * pawDist;
+        const py = Math.sin(cat.facing) * pawDist;
+
+        ctx.fillStyle = C.cat;
+        ctx.beginPath();
+        ctx.arc(px, py, pawR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 爪子高光
+        ctx.fillStyle = 'rgba(245,240,232,0.3)';
+        ctx.beginPath();
+        ctx.arc(px - 1, py - 1, pawR * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // --- 尾巴（根据速度摆动）---
+    const tailWag = (cat.vx + cat.vy) * 0.1;
+    ctx.strokeStyle = C.cat;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.7, r * 0.3);
+    ctx.quadraticCurveTo(
+        -r * 1.3, r * 0.3 + tailWag,
+        -r * 1.1, -r * 0.2 + tailWag * 1.5
+    );
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+// 调试信息
+function drawDebug() {
+    const lines = [
+        `FPS: ${fps}`,
+        `Cat: (${Math.round(cat.x)}, ${Math.round(cat.y)})  vx=${cat.vx.toFixed(1)} vy=${cat.vy.toFixed(1)}`,
+        `Input: down=${input.isDown}  swipe=${input.swipeSpeed.toFixed(1)} px/frame`,
+        `Paw: ${cat.pawExtend.toFixed(2)}`,
+    ];
+    debugEl.innerHTML = lines.join('<br>');
+}
+
+// ---------- 启动 ----------
+requestAnimationFrame(gameLoop);
+</script>
+
+</body>
+</html>
