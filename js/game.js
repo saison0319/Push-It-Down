@@ -112,16 +112,27 @@ class Game {
     // 第8步：结算检测 —— 时间到 或 物品全推完
     if (this.timeLeft <= 0 || this.landedCount >= this.totalItems) {
       this.gameState = window.STATE.GameState.GAMEOVER;
+      // 结算音效：全推完胜利，时间到失败
+      if (this.landedCount >= this.totalItems) window.audio && window.audio.playWin();
+      else window.audio && window.audio.playLose();
       return;
     }
 
-    // 第7步：主人状态机推进
+    // 第7步：主人状态机推进（主人哭泣期间暂停，避免与视察冲突）
     const M = window.STATE.MasterState;
     const m = this.master;
+    if (this.masterCry.active) {
+      // 主人正在哭泣，不推进视察状态机（保持 SLEEPING 或当前状态不动）
+      // 但如果正好在 LOOKING，让它自然结束回到 SLEEPING
+      if (m.state !== M.LOOKING) return;
+    }
     m.timer += dt;
     if (m.state === M.SLEEPING) {
       m.nextLookAt -= dt;
-      if (m.nextLookAt <= 0) { m.state = M.TURNING; m.timer = 0; }
+      if (m.nextLookAt <= 0) {
+        m.state = M.TURNING; m.timer = 0;
+        window.audio && window.audio.playWarning();  // 主人回头警告音
+      }
     } else if (m.state === M.TURNING) {
       if (m.timer >= m.turnDuration) { m.state = M.LOOKING; m.timer = 0; }
     } else if (m.state === M.LOOKING) {
@@ -231,7 +242,10 @@ class Game {
         this.combo++;
         this.bestCombo = Math.max(this.bestCombo, this.combo);
         this.comboTimer = this.comboDuration;
-        if (this.combo >= 2) this.score += this.combo; // 连击奖励分
+        if (this.combo >= 2) {
+          this.score += this.combo; // 连击奖励分
+          window.audio && window.audio.playCombo(this.combo);  // 连击提示音
+        }
         // 鱼缸：触发独立碎裂场景动画（位置在掉落点的桌面边缘，用桌面相对坐标）
         if (it.type === 'fishbowl') {
           this.fishScene.active = true;
@@ -241,6 +255,7 @@ class Game {
           this.fishScene.y = 0.85;
         }
         this.triggerFx(it.type); // 第4步：触发屏幕中央惨状特效
+        window.audio && window.audio.playShatter(it.type);  // 物品碎裂音（蜡烛内含119火警）
         continue;
       }
 
@@ -358,8 +373,17 @@ class Game {
       return;
     }
     if (this.gameState === window.STATE.GameState.GAMEOVER) {
-      // 点击屏幕任意处重玩
-      this.startGame();
+      // 只有点击"再玩一次"按钮区域才重玩（用基础尺寸，不受脉动影响）
+      const cardW = Math.min(320, this.width * 0.82);
+      const cardH = Math.min(470, this.height * 0.9);
+      const cardY = this.height / 2 - cardH / 2;
+      const bw = Math.min(200, cardW * 0.7);
+      const bh = 54;
+      const bx = this.width / 2 - bw / 2;
+      const by = cardY + 348;
+      if (px >= bx && px <= bx + bw && py >= by && py <= by + bh) {
+        this.startGame();
+      }
       return;
     }
     if (this.gameState !== window.STATE.GameState.PLAYING) return;
@@ -378,6 +402,7 @@ class Game {
       this.comboTimer = 0;
       this.caughtFx.active = true;
       this.caughtFx.t = 0;
+      window.audio && window.audio.playCaught();  // 被抓警报音
       // master 回 SLEEPING，重置下次查岗
       this.master.state = window.STATE.MasterState.SLEEPING;
       this.master.timer = 0;
@@ -414,10 +439,12 @@ class Game {
       }
       this.cat.face = 'happy';
       this.faceTimer = 1.5;
+      window.audio && window.audio.playTap();   // 拍打命中音
     } else {
       // 拍空：装无辜
       this.cat.face = 'innocent';
       this.faceTimer = 1.0;
+      window.audio && window.audio.playMiss();  // 拍空音
     }
   }
 
@@ -619,7 +646,7 @@ class Game {
     // 提示文字（按钮下方，留足间距不溢出）
     ctx.fillStyle = '#9A9388';
     ctx.font = `${stat * 0.75}px system-ui, sans-serif`;
-    ctx.fillText('点击屏幕重新开始', cx, by + bh + 16);
+    ctx.fillText('点击按钮重新开始', cx, by + bh + 16);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
@@ -1897,6 +1924,7 @@ class Game {
     if (type === 'phone') {
       this.masterCry.active = true;
       this.masterCry.t = 0;
+      window.audio && window.audio.playCry();  // 主人哭泣音
     }
     // 第6步：按物品类型触发猫的叙事动作
     const actionMap = {
