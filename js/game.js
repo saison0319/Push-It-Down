@@ -118,31 +118,30 @@ class Game {
       return;
     }
 
-    // 第7步：主人状态机推进（主人哭泣期间暂停，避免与视察冲突）
+    // 第7步：主人状态机推进（主人哭泣期间暂停视察，避免冲突）
     const M = window.STATE.MasterState;
     const m = this.master;
-    if (this.masterCry.active) {
-      // 主人正在哭泣，不推进视察状态机（保持 SLEEPING 或当前状态不动）
-      // 但如果正好在 LOOKING，让它自然结束回到 SLEEPING
-      if (m.state !== M.LOOKING) return;
-    }
-    m.timer += dt;
-    if (m.state === M.SLEEPING) {
-      m.nextLookAt -= dt;
-      if (m.nextLookAt <= 0) {
-        m.state = M.TURNING; m.timer = 0;
-        window.audio && window.audio.playWarning();  // 主人回头警告音
-      }
-    } else if (m.state === M.TURNING) {
-      if (m.timer >= m.turnDuration) { m.state = M.LOOKING; m.timer = 0; }
-    } else if (m.state === M.LOOKING) {
-      // 看着你时强制猫惊恐，且不让 faceTimer 自动回 neutral
-      this.cat.face = 'startled';
-      this.faceTimer = 0;
-      if (m.timer >= m.lookDuration) {
-        m.state = M.SLEEPING;
-        m.timer = 0;
-        m.nextLookAt = m.lookInterval[0] + Math.random() * (m.lookInterval[1] - m.lookInterval[0]);
+    // 主人哭泣期间：只让正在进行的 LOOKING 自然结束，不开始新的视察
+    const masterPaused = this.masterCry.active && m.state !== M.LOOKING;
+    if (!masterPaused) {
+      m.timer += dt;
+      if (m.state === M.SLEEPING) {
+        m.nextLookAt -= dt;
+        if (m.nextLookAt <= 0) {
+          m.state = M.TURNING; m.timer = 0;
+          window.audio && window.audio.playWarning();  // 主人回头警告音
+        }
+      } else if (m.state === M.TURNING) {
+        if (m.timer >= m.turnDuration) { m.state = M.LOOKING; m.timer = 0; }
+      } else if (m.state === M.LOOKING) {
+        // 看着你时强制猫惊恐，且不让 faceTimer 自动回 neutral
+        this.cat.face = 'startled';
+        this.faceTimer = 0;
+        if (m.timer >= m.lookDuration) {
+          m.state = M.SLEEPING;
+          m.timer = 0;
+          m.nextLookAt = m.lookInterval[0] + Math.random() * (m.lookInterval[1] - m.lookInterval[0]);
+        }
       }
     }
 
